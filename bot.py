@@ -6,6 +6,7 @@ import sqlite3
 import schedule
 import time
 import logging
+import asyncio
 
 # Logging အတွက် ပြင်ဆင်မှု
 logging.basicConfig(
@@ -43,15 +44,16 @@ async def status(event):
 async def update_member_activity():
     logger.info("Starting to update member activity...")
     async with client:
-        # နောက်ဆုံး ၇ ရက်အတွင်းရဲ့ ရက်စွဲအပိုင်းအခြားကို သတ်မှတ်ပါ
+        # နောက်ဆုံး ၃ ရက်အတွင်းရဲ့ ရက်စွဲအပိုင်းအခြားကို သတ်မှတ်ပါ
         today = datetime.now()
-        start_of_period = today - timedelta(days=7)  # နောက်ဆုံး ၇ ရက်
+        start_of_period = today - timedelta(days=3)  # နောက်ဆုံး ၃ ရက်
         end_of_period = today + timedelta(days=1)  # ဒီနေ့အထိ
 
-        # နောက်ဆုံး ၇ ရက်အတွင်းရဲ့ မက်ဆေ့ချ်တွေကို ရယူပါ
+        # နောက်ဆုံး ၃ ရက်အတွင်းရဲ့ မက်ဆေ့ချ်တွေကို ရယူပါ
         messages = []
         offset_id = 0
         while True:
+            logger.info(f"Fetching messages with offset_id {offset_id}")
             history = await client(GetHistoryRequest(
                 peer=group_username,
                 limit=100,
@@ -63,6 +65,7 @@ async def update_member_activity():
                 hash=0
             ))
             if not history.messages:
+                logger.info("No more messages to fetch")
                 break
             for message in history.messages:
                 if message.date >= start_of_period:
@@ -71,9 +74,11 @@ async def update_member_activity():
                     break
             offset_id = history.messages[-1].id
             if not history.messages[-1].date >= start_of_period:
+                logger.info("Reached messages older than 3 days")
                 break
 
         # မက်ဆေ့ချ်ပို့တဲ့သူတွေရဲ့ အချက်အလက်ကို သိမ်းပါ
+        logger.info(f"Found {len(messages)} messages in the last 3 days")
         for message in messages:
             if message.from_id:
                 user_id = message.from_id.user_id
@@ -82,7 +87,7 @@ async def update_member_activity():
                               (user_id, last_active))
                 logger.info(f"Recorded activity for user {user_id}")
         conn.commit()
-        logger.info(f"Updated {len(messages)} messages in database")
+        logger.info("Finished updating member activity")
 
 async def kick_inactive_members():
     kicked_count = 0  # တစ်နေ့မှာ kick လုပ်တဲ့ အရေအတွက်
@@ -110,7 +115,7 @@ async def kick_inactive_members():
                 logger.info(f"User {user_id} is active, not kicked")
         logger.info(f"Kicked {kicked_count} inactive members today")
 
-# တစ်နေ့တစ်ကြိမ် run ဖို့ scheduling လုဪပါ
+# တစ်နေ့တစ်ကြိမ် run ဖို့ scheduling လုပ်ပါ
 def job():
     logger.info("Running scheduled job...")
     client.loop.run_until_complete(update_member_activity())
@@ -123,4 +128,8 @@ schedule.every().day.at("00:00").do(job)
 # Bot ကို စတင်ပါ
 logger.info("Starting bot...")
 with client:
-    client.run_until_disconnected()
+    # Scheduling loop ထည့်ထားပါတယ်
+    client.loop.create_task(client.run_until_disconnected())
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # ၁ မိနစ်ခြားတစ်ခါ check လုပ်မယ်
