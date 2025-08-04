@@ -21,7 +21,7 @@ bot_token = ''
 group_username = ''  # Replace with correct group username or ID
 
 # Database setup
-conn = sqlite3.connect('group_activity.db')
+conn = sqlite3.connect('group_activity.db', check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS members (user_id INTEGER PRIMARY KEY, last_active TEXT)''')
 conn.commit()
@@ -49,9 +49,10 @@ async def status(update: Update, context):
 
 # Track new messages (including topic threads, one message per user per day)
 async def track_message(update: Update, context):
-    if update.effective_chat.id == context.bot.get_chat(group_username).id:
-        if rate_limit_check():
-            try:
+    try:
+        chat = await context.bot.get_chat(group_username)
+        if update.effective_chat.id == chat.id:
+            if rate_limit_check():
                 user_id = update.effective_user.id
                 today = datetime.now().date()
                 
@@ -71,10 +72,10 @@ async def track_message(update: Update, context):
                               (user_id, last_active))
                 conn.commit()
                 logger.info(f"Recorded activity for user {user_id}")
-            except Exception as e:
-                logger.error(f"Error in track_message: {e}")
-        else:
-            logger.warning(f"Skipping message processing for user {update.effective_user.id} due to rate limit")
+            else:
+                logger.warning(f"Skipping message processing for user {update.effective_user.id} due to rate limit")
+    except Exception as e:
+        logger.error(f"Error in track_message: {e}")
 
 # Kick inactive members (random 10 per day)
 async def kick_inactive_members():
