@@ -1,135 +1,111 @@
-from telethon.sync import TelegramClient
-from telethon.tl.functions.messages import GetHistoryRequest
-from telethon.events import NewMessage
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram import Update
 from datetime import datetime, timedelta
 import sqlite3
 import schedule
-import time
-import logging
 import asyncio
+import logging
+import random
 
-# Logging အတွက် ပြင်ဆင်မှု
+# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot_activity.log'),  # Log file ထဲမှာ သိမ်းမယ်
-        logging.StreamHandler()  # Console မှာလည်း ပြမယ်
-    ]
+    handlers=[logging.FileHandler('bot_activity.log'), logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
-# Telegram API အတွက် လိုအပ်တဲ့ အချက်အလက်များ
-api_id = 'YOUR_API_ID'  # [my.telegram.org] ကနေ ရယူပါ
-api_hash = 'YOUR_API_HASH'  # [my.telegram.org] ကနေ ရယူပါ
-bot_token = 'YOUR_BOT_TOKEN'  # @BotFather ကနေ ရယူပါ
-group_username = 'your_group_username'  # သင့်ဂရုပ်ရဲ့ username (ဥပမာ: @YourGroup)
+# Bot token and group username
+bot_token = 'your token'
+group_username = 'channel'  # Replace with correct group username or ID
 
-# Database ဖန်တီးပြီး ချိတ်ဆက်ပါ
+# Database setup
 conn = sqlite3.connect('group_activity.db')
 cursor = conn.cursor()
 cursor.execute('''CREATE TABLE IF NOT EXISTS members (user_id INTEGER PRIMARY KEY, last_active TEXT)''')
 conn.commit()
 
-# Telegram Client စတင်ပါ
-client = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
-
-# Status Command အတွက်
-@client.on(NewMessage(pattern='/status'))
-async def status(event):
-    logger.info(f"Status command received from {event.sender_id}")
-    await event.respond("Bot က အလုပ်လုပ်နေပါတယ်! Database ထဲမှာ active members တွေကို မှတ်တမ်းတင်နေပြီး inactive members တွေကို နေ့စဉ် kick လုပ်နေပါတယ်။")
+# Status command
+async def status(update: Update, context):
+    logger.info(f"Status command received from {update.effective_user.id}")
+    await update.message.reply_text("Bot က အလုပ်လုပ်နေပါတယ်! Active member တွေကို မှတ်တမ်းတင်ပြီး ၃ ရက်အတွင်း active မဖြစ်တဲ့သူတွေထဲက random 10 ယောက်ကို နေ့စဉ် kick လုပ်နေပါတယ်။")
     logger.info("Status response sent")
 
-async def update_member_activity():
-    logger.info("Starting to update member activity...")
-    async with client:
-        # နောက်ဆုံး ၃ ရက်အတွင်းရဲ့ ရက်စွဲအပိုင်းအခြားကို သတ်မှတ်ပါ
-        today = datetime.now()
-        start_of_period = today - timedelta(days=3)  # နောက်ဆုံး ၃ ရက်
-        end_of_period = today + timedelta(days=1)  # ဒီနေ့အထိ
-
-        # နောက်ဆုံး ၃ ရက်အတွင်းရဲ့ မက်ဆေ့ချ်တွေကို ရယူပါ
-        messages = []
-        offset_id = 0
-        while True:
-            logger.info(f"Fetching messages with offset_id {offset_id}")
-            history = await client(GetHistoryRequest(
-                peer=group_username,
-                limit=100,
-                offset_id=offset_id,
-                offset_date=end_of_period,
-                add_offset=0,
-                max_id=0,
-                min_id=0,
-                hash=0
-            ))
-            if not history.messages:
-                logger.info("No more messages to fetch")
-                break
-            for message in history.messages:
-                if message.date >= start_of_period:
-                    messages.append(message)
-                else:
-                    break
-            offset_id = history.messages[-1].id
-            if not history.messages[-1].date >= start_of_period:
-                logger.info("Reached messages older than 3 days")
-                break
-
-        # မက်ဆေ့ချ်ပို့တဲ့သူတွေရဲ့ အချက်အလက်ကို သိမ်းပါ
-        logger.info(f"Found {len(messages)} messages in the last 3 days")
-        for message in messages:
-            if message.from_id:
-                user_id = message.from_id.user_id
-                last_active = datetime.now().isoformat()
-                cursor.execute('INSERT OR REPLACE INTO members (user_id, last_active) VALUES (?, ?)',
-                              (user_id, last_active))
-                logger.info(f"Recorded activity for user {user_id}")
+# Track new messages
+async def track_message(update: Update, context):
+    if update.effective_chat.username == group_username.lstrip('@'):
+        user_id = update.effective_user.id
+        last_active = datetime.now().isoformat()
+        cursor.execute('INSERT OR REPLACE INTO members (user_id, last_active) VALUES (?, ?)',
+                      (user_id, last_active))
         conn.commit()
-        logger.info("Finished updating member activity")
+        logger.info(f"Recorded activity for user {user_id}")
 
+# Kick inactive members (random 10 per day)
 async def kick_inactive_members():
-    kicked_count = 0  # တစ်နေ့မှာ kick လုပ်တဲ့ အရေအတွက်
-    max_kicks_per_day = 10  # တစ်နေ့ကို အများဆုံး ၁၀ ယောက်
+    kicked_count = 0
+    max_kicks_per_day = 10
     logger.info("Starting to kick inactive members...")
 
-    async with client:
-        async for user in client.iter_participants(group_username):
-            if kicked_count >= max_kicks_per_day:
-                logger.info(f"Reached daily kick limit of {max_kicks_per_day}")
-                break
+    # Get current time and 3-day threshold
+    now = datetime.now()
+    three_days_ago = now - timedelta(days=3)
 
-            user_id = user.id
-            cursor.execute('SELECT last_active FROM members WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
+    # Get all group members
+    async with Application.builder().token(bot_token).build() as app:
+        try:
+            # Get all members who are not active in the last 3 days
+            cursor.execute('SELECT user_id, last_active FROM members')
+            active_members = {row[0]: datetime.fromisoformat(row[1]) for row in cursor.fetchall()}
+            
+            inactive_members = []
+            async for member in app.bot.get_chat_members(group_username):
+                user_id = member.user.id
+                if user_id not in active_members or active_members[user_id] < three_days_ago:
+                    inactive_members.append(user_id)
 
-            if result is None:
+            # Randomly select up to 10 inactive members
+            random.shuffle(inactive_members)
+            members_to_kick = inactive_members[:max_kicks_per_day]
+
+            # Kick selected members
+            for user_id in members_to_kick:
                 try:
-                    await client.kick_participant(group_username, user_id)
+                    await app.bot.ban_chat_member(group_username, user_id)
                     logger.info(f"Kicked user {user_id} from group")
                     kicked_count += 1
                 except Exception as e:
                     logger.error(f"Failed to kick user {user_id}: {e}")
-            else:
-                logger.info(f"User {user_id} is active, not kicked")
-        logger.info(f"Kicked {kicked_count} inactive members today")
 
-# တစ်နေ့တစ်ကြိမ် run ဖို့ scheduling လုပ်ပါ
+            logger.info(f"Kicked {kicked_count} inactive members today")
+        except Exception as e:
+            logger.error(f"Error in kick_inactive_members: {e}")
+
+# Scheduling job
 def job():
     logger.info("Running scheduled job...")
-    client.loop.run_until_complete(update_member_activity())
-    client.loop.run_until_complete(kick_inactive_members())
+    asyncio.run(kick_inactive_members())
     logger.info("Scheduled job completed")
 
-# နေ့စဉ် သတ်မှတ်ထားတဲ့ အချိန်မှာ run ဖို့ schedule သတ်မှတ်ပါ
+# Schedule daily at 00:00
 schedule.every().day.at("00:00").do(job)
 
-# Bot ကို စတင်ပါ
-logger.info("Starting bot...")
-with client:
-    # Scheduling loop ထည့်ထားပါတယ်
-    client.loop.create_task(client.run_until_disconnected())
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # ၁ မိနစ်ခြားတစ်ခါ check လုပ်မယ်
+async def main():
+    try:
+        app = Application.builder().token(bot_token).build()
+        app.add_handler(CommandHandler("status", status))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, track_message))
+        await app.initialize()
+        await app.start()
+        await app.updater.start_polling()
+
+        # Run schedule loop
+        while True:
+            schedule.run_pending()
+            await asyncio.sleep(60)
+    except Exception as e:
+        logger.error(f"Error in main: {e}")
+
+if __name__ == '__main__':
+    logger.info("Starting bot...")
+    asyncio.run(main())
