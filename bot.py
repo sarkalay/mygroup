@@ -44,12 +44,12 @@ def rate_limit_check():
 # Status command
 async def status(update: Update, context):
     logger.info(f"Status command received from {update.effective_user.id}")
-    await update.message.reply_text("Bot က အလုပ်လုပ်နေပါတယ်! Active member တွေကို တစ်ရက်တစ်ခါ မှတ်တမ်းတင်ပြီး ၃ ရက်အတွင်း active မဖြစ်တဲ့သူတွေကို kick လုပ်နေပါတယ်။")
+    await update.message.reply_text("Bot က အလုပ်လုပ်နေပါတယ်! Active member တွေကို တစ်ရက်တစ်ခါ မှတ်တမ်းတင်ပြီး ၃ ရက်အတွင်း active မဖြစ်တဲ့သူတွေကို နေ့စဉ် kick လုပ်နေပါတယ်။")
     logger.info("Status response sent")
 
-# Track new messages (only one message per user per day)
+# Track new messages (including topic threads, one message per user per day)
 async def track_message(update: Update, context):
-    if update.effective_chat.username == group_username.lstrip('@'):
+    if update.effective_chat.id == context.bot.get_chat(group_username).id:
         if rate_limit_check():
             try:
                 user_id = update.effective_user.id
