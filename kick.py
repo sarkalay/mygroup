@@ -2,6 +2,10 @@ from telegram.ext import Application
 import sqlite3
 import asyncio
 
+# Bot token and group username
+bot_token = 'YOUR_BOT_TOKEN_HERE'  # ဒီမှာ သင့်ရဲ့ Telegram Bot Token ထည့်ပါ
+group_username = 'YOUR_GROUP_USERNAME_HERE'  # ဒီမှာ သင့်ရဲ့ Telegram Group Username ဒါမှမဟုတ် Chat ID ထည့်ပါ
+
 async def manual_kick():
     conn = sqlite3.connect('group_activity.db')
     cursor = conn.cursor()
